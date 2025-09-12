@@ -10,4 +10,5 @@ dependencies = [
     "imageio==2.15.0",
     "setuptools",
     "tqdm>=4.67.1",
+    "ego4d>=1.7.3",
 ]
