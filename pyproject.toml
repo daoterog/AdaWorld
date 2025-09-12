@@ -1,0 +1,13 @@
+[project]
+name = "adaworld"
+version = "0.1.0"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    # Core dependencies for procgen environment (tested and working)
+    "procgen==0.10.7",
+    "numpy>=1.17.0,<2.0.0",
+    "imageio-ffmpeg>=0.3.0,<0.4.0",
+    "imageio==2.15.0",
+    "setuptools",
+    "tqdm>=4.67.1",
+]
