@@ -18,4 +18,6 @@ dependencies = [
     "black>=25.1.0",
     "isort>=6.0.1",
     "tensorflow-datasets>=4.9.9",
+    "tensorflow==2.12.0",
+    "protobuf==3.20.3",
 ]
