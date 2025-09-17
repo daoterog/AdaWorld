@@ -4,8 +4,8 @@ __pycache__/
 *$py.class
 
 # Data Stuff
-data/
 rtx/
+*.mp4
 
 # C extensions
 *.so
