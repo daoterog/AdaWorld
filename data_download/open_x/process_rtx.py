@@ -23,10 +23,10 @@ class Args:
     """Configuration class for dataset processing parameters."""
 
     save_root: str = (
-        "data/openx"  # Root directory where processed video files will be saved
+        "../../data/openx"  # Root directory where processed video files will be saved
     )
     orig_root: str = (
-        "./rtx"  # Root directory containing the original downloaded RTX datasets
+        "../../data/rtx"  # Root directory containing the original downloaded RTX datasets
     )
 
 

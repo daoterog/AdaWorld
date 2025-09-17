@@ -1,4 +1,4 @@
-DOWNLOAD_DIR="data/rtx"
+DOWNLOAD_DIR="../../data/rtx"
 DATASET_TRANSFORMS=(
     "aloha_mobile"
     "asu_table_top_converted_externally_to_rlds"
