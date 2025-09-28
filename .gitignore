@@ -6,6 +6,7 @@ __pycache__/
 # Data Stuff
 rtx/
 *.mp4
+*.webm
 *.csv
 
 # C extensions
