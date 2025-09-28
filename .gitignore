@@ -8,6 +8,11 @@ rtx/
 *.mp4
 *.webm
 *.csv
+*.zip
+*.tar.gz
+20bn-something-something-v2-00
+20bn-something-something-v2-01
+data/something_something_v2/labels
 
 # C extensions
 *.so
