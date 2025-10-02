@@ -9,6 +9,7 @@ dataset formats and camera configurations commonly found in robotics datasets.
 import os
 from dataclasses import dataclass
 from os import listdir, makedirs, path
+from pathlib import Path
 
 # Suppress TensorFlow verbose logging to reduce console output during processing
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -22,12 +23,8 @@ from tqdm.auto import trange  # For progress bars during batch processing
 class Args:
     """Configuration class for dataset processing parameters."""
 
-    save_root: str = (
-        "../../data/openx"  # Root directory where processed video files will be saved
-    )
-    orig_root: str = (
-        "../../data/rtx"  # Root directory containing the original downloaded RTX datasets
-    )
+    save_root: str = Path(__file__).parents[2] / "data" / "open_x"
+    orig_root: str = Path(__file__).parents[2] / "data" / "rtx"
 
 
 def dataset2path(dataset_name) -> str:
