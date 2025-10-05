@@ -72,6 +72,11 @@ def parse_args() -> argparse.Namespace:
         / "clip_video",
         help="Directory to save clipped video segments",
     )
+    parser.add_argument(
+        "--remove_raw_videos",
+        action="store_true",
+        help="If set, remove raw videos after clipping",
+    )
     args = parser.parse_args()
     return args
 
@@ -219,43 +224,59 @@ def process_videos(
 
 
 def main() -> None:
-    # Parse command line arguments
-    args = parse_args()
+    try:
+        # Parse command line arguments
+        args = parse_args()
 
-    # Handle metadata CSV - either use provided path or auto-download
-    metadata_dir = Path(__file__).parent.resolve()
-    if args.meta_csv is None:
-        # Auto-download metadata if no CSV path provided
-        metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
-    else:
-        # Use provided CSV path, but check if it exists
-        metadata_csv_path = args.meta_csv
-        if not os.path.exists(metadata_csv_path):
-            logger.warning(f"Specified metadata CSV not found: {metadata_csv_path}")
-            logger.warning("Attempting to auto-download metadata...")
+        # Handle metadata CSV - either use provided path or auto-download
+        metadata_dir = Path(__file__).parent.resolve()
+        if args.meta_csv is None:
+            # Auto-download metadata if no CSV path provided
             metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
+        else:
+            # Use provided CSV path, but check if it exists
+            metadata_csv_path = args.meta_csv
+            if not os.path.exists(metadata_csv_path):
+                logger.warning(f"Specified metadata CSV not found: {metadata_csv_path}")
+                logger.warning("Attempting to auto-download metadata...")
+                metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
 
-    # Load the metadata CSV file containing video information
-    df = pd.read_csv(metadata_csv_path, encoding="utf-8")
-    logger.info(
-        f"Successfully loaded the CSV file with {len(df)} entries from {metadata_csv_path}"
-    )
-
-    # If --sample flag is set, reduce to a small subset for testing
-    if args.sample:
-        df, _ = split_data(
-            df, train_size=args.n_samples / len(df), strata=["source"], random_state=42
-        )
+        # Load the metadata CSV file containing video information
+        df = pd.read_csv(metadata_csv_path, encoding="utf-8")
         logger.info(
-            f"Sample mode enabled: reduced dataset to {args.n_samples} random entries for testing"
+            f"Successfully loaded the CSV file with {len(df)} entries from {metadata_csv_path}"
         )
 
-    process_videos(df, args.raw_video_save_dir, args.clip_video_save_dir)
+        # If --sample flag is set, reduce to a small subset for testing
+        if args.sample:
+            df, _ = split_data(
+                df, train_size=args.n_samples / len(df), strata=["source"], random_state=42
+            )
+            logger.info(
+                f"Sample mode enabled: reduced dataset to {args.n_samples} random entries for testing"
+            )
 
-    logger.info("Processing complete! All videos have been downloaded and clipped.")
-    logger.info(f"Metadata used: {metadata_csv_path}")
-    logger.info(f"Raw videos saved to: {args.raw_video_save_dir}")
-    logger.info(f"Clipped videos saved to: {args.clip_video_save_dir}")
+        process_videos(df, args.raw_video_save_dir, args.clip_video_save_dir)
+
+        logger.info("Processing complete! All videos have been downloaded and clipped.")
+        logger.info(f"Metadata used: {metadata_csv_path}")
+        logger.info(f"Raw videos saved to: {args.raw_video_save_dir}")
+        logger.info(f"Clipped videos saved to: {args.clip_video_save_dir}")
+
+        if args.remove_raw_videos:
+            os.system(f"bash {Path(__file__).parent}/remove_raw_videos.sh")
+            logger.info("Raw videos have been removed after clipping.")
+
+    except KeyboardInterrupt:
+        if args.remove_raw_videos:
+            os.system(f"bash {Path(__file__).parent}/remove_raw_videos.sh")
+            logger.info("Raw videos have been removed after clipping.")
+        raise  # re-raise so program still exits with Ctrl+C
+    except Exception as e:
+        if args.remove_raw_videos:
+            os.system(f"bash {Path(__file__).parent}/remove_raw_videos.sh")
+            logger.info("Raw videos have been removed after clipping.")
+        raise
 
 
 if __name__ == "__main__":
