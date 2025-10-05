@@ -72,12 +72,24 @@ def parse_args() -> argparse.Namespace:
 
 
 def download_ytb_video(
-    video_url: str, raw_video_download_path: str, download_id: int
+    video_url: str, raw_video_download_path: Path, download_id: int
 ) -> None:
     """Download YouTube video at 360p resolution using yt-dlp."""
     try:
         # Extract video ID from YouTube URL and download
         video_id = video_url.split("watch?v=")[-1]
+
+        if os.path.exists(str(raw_video_download_path) + ".part"):
+            # remove any existing partial download file
+            logger.info(
+                f"Removing existing partial download file: {str(raw_video_download_path) + '.part'}"
+            )
+            os.remove(str(raw_video_download_path) + ".part")
+
+        if os.path.exists(raw_video_download_path):
+            # skip if video already exists (resume functionality)
+            logger.info(f"Video already exists, skipping: {raw_video_download_path}")
+            return
 
         # Use yt-dlp to download YouTube video at 360p with H.264/AAC encoding
         ret = os.system(
@@ -87,7 +99,7 @@ def download_ytb_video(
         if ret != 0:
             raise Exception(f"yt-dlp failed with return code {ret}")
     except Exception as error:
-        print(f"Error downloading YouTube video {download_id}: {error}")
+        logger.error(f"Error downloading YouTube video {download_id}: {error}")
 
 
 def download_stream_video(
@@ -97,9 +109,15 @@ def download_stream_video(
     try:
         res = requests.get(video_url, stream=True)
 
-        # Clean up any existing temporary file
         if os.path.exists(raw_video_download_path + ".tmp"):
+            # Clean up any existing temporary file
+            logger.info(f"Removing temporary file: {raw_video_download_path + '.tmp'}")
             os.remove(raw_video_download_path + ".tmp")
+
+        if os.path.exists(raw_video_download_path):
+            # Skip if video already exists (resume functionality)
+            logger.info(f"Video already exists, skipping: {raw_video_download_path}")
+            return
 
         # Download in chunks to handle large files efficiently
         with open(raw_video_download_path + ".tmp", "wb") as f:
@@ -110,7 +128,7 @@ def download_stream_video(
         os.rename(raw_video_download_path + ".tmp", raw_video_download_path)
 
     except Exception as error:
-        print(f"Error downloading stream video {download_id}: {error}")
+        logger.error(f"Error downloading stream video {download_id}: {error}")
 
 
 def clip_video(
@@ -128,6 +146,7 @@ def clip_video(
 
         # Skip if clipped video already exists (resume functionality)
         if os.path.exists(clip_video_path):
+            logger.info(f"Clipped video already exists, skipping: {clip_video_path}")
             return
 
         # Parse timestamp information from the CSV (stored as string representation of list)
@@ -153,7 +172,7 @@ def clip_video(
         os.system(run_command)
 
     except Exception as error:
-        print(f"Error clipping video {download_id}: {error}")
+        logger.error(f"Error clipping video {download_id}: {error}")
 
 
 def process_videos(
@@ -220,16 +239,16 @@ def main() -> None:
         df, _ = split_data(
             df, train_size=args.n_samples / len(df), strata=["source"], random_state=42
         )
-        print(
+        logger.info(
             f"Sample mode enabled: reduced dataset to {args.n_samples} random entries for testing"
         )
 
     process_videos(df, args.raw_video_save_dir, args.clip_video_save_dir)
 
-    print("Processing complete! All videos have been downloaded and clipped.")
-    print(f"Metadata used: {metadata_csv_path}")
-    print(f"Raw videos saved to: {args.raw_video_save_dir}")
-    print(f"Clipped videos saved to: {args.clip_video_save_dir}")
+    logger.info("Processing complete! All videos have been downloaded and clipped.")
+    logger.info(f"Metadata used: {metadata_csv_path}")
+    logger.info(f"Raw videos saved to: {args.raw_video_save_dir}")
+    logger.info(f"Clipped videos saved to: {args.clip_video_save_dir}")
 
 
 if __name__ == "__main__":
