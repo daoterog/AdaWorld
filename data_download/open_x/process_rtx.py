@@ -9,23 +9,32 @@ dataset formats and camera configurations commonly found in robotics datasets.
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 # Suppress TensorFlow verbose logging to reduce console output during processing
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+sys.path.append(Path(__file__).parents[2].as_posix())
 
 import imageio  # For video file creation and image processing
+import numpy as np
+import pandas as pd
 import tensorflow_datasets as tfds  # For loading and processing TensorFlow datasets
+from sklearn.model_selection import train_test_split
 from tqdm.auto import trange  # For progress bars during batch processing
 
-from data_download.open_x.constants import DATASET_LIST, DISPLAY_KEYS, EPISODE_COUNT_PER_DATASET
+from data_download.open_x.constants import (DISPLAY_KEYS,
+                                            EPISODE_COUNT_PER_DATASET)
+from data_download.utils import split_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Process RTX datasets to extract videos")
+    parser = argparse.ArgumentParser(
+        description="Process RTX datasets to extract videos"
+    )
     parser.add_argument(
         "--save_root",
         type=str,
@@ -55,6 +64,62 @@ def parse_args() -> argparse.Namespace:
         help="Number of samples to process if --sample is set",
     )
     return parser.parse_args()
+
+
+def get_data_split(n_samples: int) -> pd.DataFrame:
+
+    # Create index for dataset
+    indices = None
+    categories = None
+    for dataset, episode_count in EPISODE_COUNT_PER_DATASET.items():
+        dataset_indices = np.arange(episode_count)
+        dataset_categories = pd.Series([dataset] * episode_count)
+        if indices is None:
+            indices = dataset_indices
+            categories = dataset_categories
+        else:
+            indices = np.concatenate((indices, dataset_indices))
+            categories = pd.concat((categories, dataset_categories))
+
+    df = pd.DataFrame({"indices": indices, "categories": categories})
+
+    sample_indices, _ = split_data(
+        df, train_size=(n_samples / len(df)), strata=["categories"], random_state=42
+    )
+
+    return sample_indices
+
+
+def download_dataset(dataset_name: str, rtx_root: Path) -> None:
+    """
+    Download the specified RTX dataset using TensorFlow Datasets.
+
+    Args:
+        dataset_name (str): Name of the dataset to download
+        rtx_root (Path): Root directory where datasets should be stored
+    """
+
+    # Check if dataset already exists
+    dataset_path = rtx_root / dataset_name
+    if dataset_path.exists():
+        logger.info(f"  ⏭️  Dataset {dataset_name} already exists, skipping download.")
+        return
+
+    try:
+        logger.info(f"  ⬇️  Downloading dataset: {dataset_name}")
+
+        logger.info(f"     Running download script for {dataset_name}...")
+        logger.info(
+            f"bash {Path(__file__).parent}/download_specific_dataset.sh {dataset_name} {rtx_root}"
+        )
+        ret = os.system(
+            f"bash {Path(__file__).parent}/download_specific_dataset.sh {dataset_name} {rtx_root}"
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"Download script failed with exit code {ret}")
+    except Exception as e:
+        logger.error(f"  ❌  Failed to download dataset {dataset_name}: {e}")
 
 
 def dataset2path(rtx_root: Path, dataset_name: str) -> str:
@@ -121,6 +186,7 @@ def extract_sample(
     save_dir: str,
     split: str,
     extra: str = None,
+    sample_indices: pd.DataFrame = None,
 ) -> None:
     """
     Extract image sequences from a dataset and save them as MP4 videos.
@@ -162,6 +228,9 @@ def extract_sample(
     ):
         try:
             episode = next(ds_iter)
+
+            if sample_indices is not None and episode_idx not in sample_indices:
+                continue
 
             # Handle different dataset structures for image extraction
             if dataset_name == "robot_vqa":
@@ -244,19 +313,34 @@ def main():
     logger.info("🚀 Starting RTX dataset processing...")
     logger.info(f"📁 Source directory: {args.rtx_root}")
     logger.info(f"💾 Output directory: {args.save_root}")
-    logger.info(f"📋 Datasets to process: {[d for d in DATASET_LIST]}")
+    logger.info(
+        f"📋 Datasets to process: {[d for d in EPISODE_COUNT_PER_DATASET.keys()]}"
+    )
     logger.info("=" * 80)
 
-    # Process each dataset in the list
-    for dataset_idx, dataset in enumerate(DATASET_LIST, 1):
+    sample_indices = None
+    if args.sample:
         logger.info(
-            f"\n🗂️  Processing dataset {dataset_idx}/{len(DATASET_LIST)}: {dataset}"
+            f"🔍 Sampling enabled: processing {args.n_samples} samples per dataset"
+        )
+        sample_indices = get_data_split(args.n_samples)
+        logger.info(f"   Sample indices length: {len(sample_indices)}")
+
+    # Process each dataset in the lists
+    for dataset_idx, dataset in enumerate(EPISODE_COUNT_PER_DATASET.keys(), 1):
+        logger.info(
+            f"\n🗂️  Processing dataset {dataset_idx}/{len(EPISODE_COUNT_PER_DATASET)}: {dataset}"
         )
         is_feasible = False
 
+        if args.download_and_process:
+            download_dataset(dataset, args.rtx_root)
+
         try:
             # Load the TensorFlow dataset builder for this dataset
-            builder = tfds.builder_from_directory(builder_dir=dataset2path(args.rtx_root, dataset))
+            builder = tfds.builder_from_directory(
+                builder_dir=dataset2path(args.rtx_root, dataset)
+            )
             logger.info(f"  ✅ Dataset builder loaded successfully")
             logger.info(f"  📊 Available splits: {list(builder.info.splits.keys())}")
 
@@ -276,6 +360,17 @@ def main():
             builder, infeasible_datasets, dataset
         )
 
+        if sample_indices is not None:
+            if dataset not in sample_indices["categories"].values:
+                logger.info(
+                    f"  ⏭️  Skipping {dataset} (no samples selected, class is too small for sample size)"
+                )
+                continue
+
+            dataset_sample_indices = sample_indices[
+                sample_indices["categories"] == dataset
+            ]
+
         for display_key in compatible_keys:
             logger.info(f"\n  🖼️  Processing image key: {display_key}")
 
@@ -294,6 +389,11 @@ def main():
                                 folder,
                                 split_name,
                                 "front_image_1",
+                                sample_indices=(
+                                    set(dataset_sample_indices["indices"].values)
+                                    if sample_indices is not None
+                                    else None
+                                ),
                             )
                     else:
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
@@ -310,6 +410,11 @@ def main():
                                 folder,
                                 split_name,
                                 "front_image_2",
+                                sample_indices=(
+                                    set(dataset_sample_indices["indices"].values)
+                                    if sample_indices is not None
+                                    else None
+                                ),
                             )
                     else:
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
@@ -326,18 +431,32 @@ def main():
                                 folder,
                                 split_name,
                                 display_key,
+                                sample_indices=(
+                                    set(dataset_sample_indices["indices"].values)
+                                    if sample_indices is not None
+                                    else None
+                                ),
                             )
                     else:
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
             else:
                 # Standard processing for most datasets
-                folder = args.rtx_root / f"{dataset}-{display_key}"
+                folder = args.save_root / f"{dataset}-{display_key}"
                 if not os.path.exists(folder):  # Skip if already processed
                     logger.info(f"    📁 Creating output folder: {folder}")
                     # Process all available splits (train, test, validation, etc.)
                     for split_name in builder.info.splits.keys():
                         extract_sample(
-                            builder, display_key, dataset, folder, split_name
+                            builder,
+                            display_key,
+                            dataset,
+                            folder,
+                            split_name,
+                            sample_indices=(
+                                set(dataset_sample_indices["indices"].values)
+                                if sample_indices is not None
+                                else None
+                            ),
                         )
                 else:
                     logger.info(f"    ⏭️  Skipping {folder} (already exists)")
