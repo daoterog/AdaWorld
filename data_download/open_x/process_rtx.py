@@ -63,6 +63,11 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Number of samples to process if --sample is set",
     )
+    parser.add_argument(
+        "--remove_raw_videos",
+        action="store_true",
+        help="If set, remove raw video files after processing to save space",
+    )
     return parser.parse_args()
 
 
@@ -471,6 +476,11 @@ def main():
         else:
             infeasible_datasets.append(dataset)
             logger.info(f"  ❌ Dataset {dataset} marked as infeasible")
+
+        if args.remove_raw_videos:
+            os.system(f"rm -rf {args.rtx_root}/{dataset}")
+            logger.info("Raw videos have been removed after clipping.")
+
     # Print final processing summary
     logger.info("\n" + "=" * 80)
     logger.info("🏁 PROCESSING COMPLETE!")
