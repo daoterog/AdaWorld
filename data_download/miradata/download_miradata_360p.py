@@ -193,10 +193,12 @@ def process_videos(
             raw_video_download_path.parent.mkdir(parents=True, exist_ok=True)
 
             if "youtube" in row["source"]:
+                logger.info(f"Downloading YouTube video ID {download_id}")
                 download_ytb_video(
                     row["video_url"], raw_video_download_path, download_id
                 )
             else:
+                logger.info(f"Downloading stream video ID {download_id}")
                 download_stream_video(
                     row["video_url"], raw_video_download_path, download_id
                 )
