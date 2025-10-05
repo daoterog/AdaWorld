@@ -20,9 +20,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import tqdm
-
-from .utils import (download_metadata_if_needed,
-                                          split_data)
+from utils import download_metadata_if_needed, split_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,13 +55,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--raw_video_save_dir",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "data" / "/miradata" / "raw_video",
+        default=Path(__file__).resolve().parents[2] / "data" / "miradata" / "raw_video",
         help="Directory to save downloaded raw videos",
     )
     parser.add_argument(
         "--clip_video_save_dir",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "data" / "miradata" / "clip_video",
+        default=Path(__file__).resolve().parents[2]
+        / "data"
+        / "miradata"
+        / "clip_video",
         help="Directory to save clipped video segments",
     )
     args = parser.parse_args()
@@ -114,18 +115,16 @@ def download_stream_video(
 
 def clip_video(
     download_id: str,
-    clip_video_save_dir: str,
+    clip_video_save_dir: Path,
     file_path: str,
     raw_video_download_path: str,
     clip_video_path: str,
-    start_time: str,
-    end_time: str,
     timestamp: str,
 ) -> None:
     """Clip the downloaded video to the specified timestamp range."""
     try:
         # Build output path for the clipped video segment
-        clip_video_path = os.path.join(clip_video_save_dir, file_path)
+        clip_video_path = clip_video_save_dir / file_path
 
         # Skip if clipped video already exists (resume functionality)
         if os.path.exists(clip_video_path):
@@ -148,8 +147,7 @@ def clip_video(
         run_command = f"ffmpeg -ss {start_time} -t {duration} -i {raw_video_download_path} -c copy -y {clip_video_path}"
 
         # Create output directory if it doesn't exist
-        if not os.path.exists(os.path.dirname(clip_video_path)):
-            os.makedirs(os.path.dirname(clip_video_path))
+        clip_video_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Execute the ffmpeg command to create the video clip
         os.system(run_command)
@@ -159,21 +157,21 @@ def clip_video(
 
 
 def process_videos(
-    df: pd.DataFrame, raw_video_save_dir: str, clip_video_save_dir: str
+    df: pd.DataFrame, raw_video_save_dir: Path, clip_video_save_dir: str
 ) -> None:
     """Process and download videos from the Miradata dataset."""
     for _, row in tqdm.tqdm(df.iterrows(), desc="Processing videos"):
 
         # Define paths for raw and clipped videos
         download_id = int(row["clip_id"])
-        raw_video_download_path = os.path.join(
-            raw_video_save_dir, str(download_id).zfill(12) + ".mp4"
+        raw_video_download_path = raw_video_save_dir / (
+            str(download_id).zfill(12) + ".mp4"
         )
 
         # Skip download if video already exists (resume functionality)
         if not os.path.exists(raw_video_download_path):
             # Create directory structure if it doesn't exist
-            os.makedirs(os.path.dirname(raw_video_download_path), exist_ok=True)
+            raw_video_download_path.parent.mkdir(parents=True, exist_ok=True)
 
             if "youtube" in row["source"]:
                 download_ytb_video(
@@ -190,8 +188,6 @@ def process_videos(
             file_path=row["file_path"],
             raw_video_download_path=raw_video_download_path,
             clip_video_path=clip_video_save_dir,
-            start_time=row["start_time"],
-            end_time=row["end_time"],
             timestamp=row["timestamp"],
         )
 
@@ -201,22 +197,21 @@ def main() -> None:
     args = parse_args()
 
     # Handle metadata CSV - either use provided path or auto-download
+    metadata_dir = Path(__file__).parent.resolve()
     if args.meta_csv is None:
         # Auto-download metadata if no CSV path provided
-        metadata_dir = os.path.dirname(__file__)
         metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
     else:
         # Use provided CSV path, but check if it exists
         metadata_csv_path = args.meta_csv
         if not os.path.exists(metadata_csv_path):
-            print(f"Specified metadata CSV not found: {metadata_csv_path}")
-            print("Attempting to auto-download metadata...")
-            metadata_dir = os.path.dirname(metadata_csv_path)
+            logger.warning(f"Specified metadata CSV not found: {metadata_csv_path}")
+            logger.warning("Attempting to auto-download metadata...")
             metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
 
     # Load the metadata CSV file containing video information
     df = pd.read_csv(metadata_csv_path, encoding="utf-8")
-    print(
+    logger.info(
         f"Successfully loaded the CSV file with {len(df)} entries from {metadata_csv_path}"
     )
 
