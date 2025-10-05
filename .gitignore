@@ -13,6 +13,7 @@ rtx/
 20bn-something-something-v2-00
 20bn-something-something-v2-01
 data/something_something_v2/labels
+*.part
 
 # C extensions
 *.so
