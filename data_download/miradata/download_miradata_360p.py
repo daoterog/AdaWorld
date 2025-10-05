@@ -14,13 +14,18 @@ The script supports resuming downloads - it will skip files that already exist.
 import argparse
 import logging
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
+
+sys.path.append(Path(__file__).parents[2].as_posix())
+
 
 import pandas as pd
 import requests
 import tqdm
-from utils import download_metadata_if_needed, split_data
+
+from data_download.utils import download_metadata_if_needed, split_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
