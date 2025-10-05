@@ -6,10 +6,9 @@ from various camera viewpoints and converting them into MP4 video files. It hand
 dataset formats and camera configurations commonly found in robotics datasets.
 """
 
+import argparse
 import logging
 import os
-from dataclasses import dataclass
-from os import listdir, makedirs, path
 from pathlib import Path
 
 # Suppress TensorFlow verbose logging to reduce console output during processing
@@ -19,21 +18,46 @@ import imageio  # For video file creation and image processing
 import tensorflow_datasets as tfds  # For loading and processing TensorFlow datasets
 from tqdm.auto import trange  # For progress bars during batch processing
 
-from data_download.open_x.constants import DATASET_LIST, DISPLAY_KEYS
+from data_download.open_x.constants import DATASET_LIST, DISPLAY_KEYS, EPISODE_COUNT_PER_DATASET
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Args:
-    """Configuration class for dataset processing parameters."""
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Process RTX datasets to extract videos")
+    parser.add_argument(
+        "--save_root",
+        type=str,
+        default=Path(__file__).parents[2] / "data" / "open_x",
+        help="Directory to save processed video files",
+    )
+    parser.add_argument(
+        "--rtx_root",
+        type=str,
+        default=Path(__file__).parents[2] / "data" / "rtx",
+        help="Root directory where original RTX datasets are stored",
+    )
+    parser.add_argument(
+        "--download_and_process",
+        action="store_true",
+        help="If set, download and process datasets; otherwise, only process existing data",
+    )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="If set, process only a small sample of the data for testing",
+    )
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=10,
+        help="Number of samples to process if --sample is set",
+    )
+    return parser.parse_args()
 
-    save_root: str = Path(__file__).parents[2] / "data" / "open_x"
-    orig_root: str = Path(__file__).parents[2] / "data" / "rtx"
 
-
-def dataset2path(dataset_name: str) -> str:
+def dataset2path(rtx_root: Path, dataset_name: str) -> str:
     """
     Construct the path to the latest version of a specified dataset.
 
@@ -49,8 +73,8 @@ def dataset2path(dataset_name: str) -> str:
     logger.info(f"  📁 Looking for dataset: {dataset_name}")
 
     # List all version directories for the given dataset
-    dataset_path = path.join(Args.orig_root, dataset_name)
-    versions = listdir(dataset_path)
+    dataset_path = rtx_root / dataset_name
+    versions = os.listdir(dataset_path)
     versions.sort()
     logger.info(f"     Found versions: {versions}")
 
@@ -59,7 +83,7 @@ def dataset2path(dataset_name: str) -> str:
 
     # Select the latest version (last in sorted order)
     version = versions[-1]
-    final_path = path.join(Args.orig_root, dataset_name, version)
+    final_path = rtx_root / dataset_name / version
     logger.info(f"     Using latest version: {version} -> {final_path}")
 
     return final_path
@@ -162,8 +186,8 @@ def extract_sample(
                 images = images
 
             # Create output path with zero-padded episode index
-            save_path = path.join(save_dir, split, f"{episode_idx:08}.mp4")
-            makedirs(path.dirname(save_path), exist_ok=True)
+            save_path = save_dir / split / f"{episode_idx:08}.mp4"
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert image sequence to video file
             save_images_to_video(images, save_path)
@@ -208,6 +232,9 @@ def get_compatible_keys(
 def main():
     """Main function to process all RTX datasets and extract videos from image observations."""
 
+    # Parse command line arguments
+    args = parse_args()
+
     # Track processing statistics
     feasible_datasets = 0  # Count of datasets that have compatible image observations
     infeasible_datasets = []  # List of datasets that lack compatible image keys
@@ -215,8 +242,8 @@ def main():
     # Comprehensive list of possible image observation keys found across RTX datasets
     # These represent different camera viewpoints and image formats used in robotics datasets
     logger.info("🚀 Starting RTX dataset processing...")
-    logger.info(f"📁 Source directory: {Args.orig_root}")
-    logger.info(f"💾 Output directory: {Args.save_root}")
+    logger.info(f"📁 Source directory: {args.rtx_root}")
+    logger.info(f"💾 Output directory: {args.save_root}")
     logger.info(f"📋 Datasets to process: {[d for d in DATASET_LIST]}")
     logger.info("=" * 80)
 
@@ -229,7 +256,7 @@ def main():
 
         try:
             # Load the TensorFlow dataset builder for this dataset
-            builder = tfds.builder_from_directory(builder_dir=dataset2path(dataset))
+            builder = tfds.builder_from_directory(builder_dir=dataset2path(args.rtx_root, dataset))
             logger.info(f"  ✅ Dataset builder loaded successfully")
             logger.info(f"  📊 Available splits: {list(builder.info.splits.keys())}")
 
@@ -256,8 +283,8 @@ def main():
             if dataset == "mimic_play":
                 if display_key == "image":
                     # Extract front_image_1 from the nested image structure
-                    folder = path.join(Args.save_root, f"{dataset}-front_image_1")
-                    if not path.exists(folder):
+                    folder = args.save_root / f"{dataset}-front_image_1"
+                    if not os.path.exists(folder):
                         logger.info(f"    📁 Creating output folder: {folder}")
                         for split_name in builder.info.splits.keys():
                             extract_sample(
@@ -272,8 +299,8 @@ def main():
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
 
                     # Extract front_image_2 from the nested image structure
-                    folder = path.join(Args.save_root, f"{dataset}-front_image_2")
-                    if not path.exists(folder):
+                    folder = args.save_root / f"{dataset}-front_image_2"
+                    if not os.path.exists(folder):
                         logger.info(f"    📁 Creating output folder: {folder}")
                         for split_name in builder.info.splits.keys():
                             extract_sample(
@@ -288,8 +315,8 @@ def main():
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
                 else:
                     # Handle other image keys in mimic_play with nested structure
-                    folder = path.join(Args.save_root, f"{dataset}-{display_key}")
-                    if not path.exists(folder):
+                    folder = args.save_root / f"{dataset}-{display_key}"
+                    if not os.path.exists(folder):
                         logger.info(f"    📁 Creating output folder: {folder}")
                         for split_name in builder.info.splits.keys():
                             extract_sample(
@@ -304,8 +331,8 @@ def main():
                         logger.info(f"    ⏭️  Skipping {folder} (already exists)")
             else:
                 # Standard processing for most datasets
-                folder = path.join(Args.save_root, f"{dataset}-{display_key}")
-                if not path.exists(folder):  # Skip if already processed
+                folder = args.rtx_root / f"{dataset}-{display_key}"
+                if not os.path.exists(folder):  # Skip if already processed
                     logger.info(f"    📁 Creating output folder: {folder}")
                     # Process all available splits (train, test, validation, etc.)
                     for split_name in builder.info.splits.keys():
@@ -337,7 +364,7 @@ def main():
         for i, dataset in enumerate(infeasible_datasets, 1):
             logger.info(f"   {i}. {dataset}")
 
-    logger.info(f"\n📁 All output videos saved to: {Args.save_root}")
+    logger.info(f"\n📁 All output videos saved to: {args.save_root}")
     logger.info("🎉 Done!")
 
 
