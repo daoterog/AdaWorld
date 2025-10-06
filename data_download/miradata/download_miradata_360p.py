@@ -26,7 +26,9 @@ import pandas as pd
 import requests
 import tqdm
 
-from data_download.utils import download_metadata_if_needed, split_data
+from data_download.miradata.download_metadata import \
+    download_metadata_if_needed
+from data_download.utils import split_data
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -67,9 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--clip_video_save_dir",
         type=Path,
-        default=Path(__file__).resolve().parents[2]
-        / "data"
-        / "miradata",
+        default=Path(__file__).resolve().parents[2] / "data" / "miradata",
         help="Directory to save clipped video segments",
     )
     parser.add_argument(
