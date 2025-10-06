@@ -2,6 +2,7 @@
 
 import logging
 import os
+import unicodedata
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -78,6 +79,49 @@ def split_data(
     return train, test
 
 
+def normalize_strings(
+    series: pd.Series,
+    form: str = "NFKC",
+    remove_invisibles: bool = True,
+    casefold: bool = False,
+) -> pd.Series:
+    # work on string representation but keep everything as strings
+    s = series.astype(str)
+
+    # 1) Unicode normalize with pandas (vectorized, fast)
+    s = s.str.normalize(form)
+
+    # 2) remove common zero-width / BOM chars with a vectorized replace
+    if remove_invisibles:
+        s = s.str.replace(r"[\u200B\u200C\u200D\uFEFF]", "", regex=True)
+
+        # If you still suspect other invisible "format" chars, do a small python-level fallback
+        # only for rows that still contain characters in Unicode category 'Cf'.
+        # This avoids calling Python on every element.
+        maybe = s.str.contains(r"[\u200B\u200C\u200D\uFEFF]", regex=True) == False
+        # detect any remaining Cf chars using a cheap per-string check
+        mask = s[maybe].apply(
+            lambda x: any(unicodedata.category(ch) == "Cf" for ch in x)
+        )
+        if mask.any():
+
+            def remove_format_chars(x):
+                return "".join(ch for ch in x if unicodedata.category(ch) != "Cf")
+
+            s.loc[mask.index[mask]] = [
+                remove_format_chars(x) for x in s.loc[mask.index[mask]]
+            ]
+
+    # 3) trim whitespace
+    s = s.str.strip()
+
+    # 4) optional casefold for case-insensitive equivalence (keeps alnum)
+    if casefold:
+        s = s.str.casefold()
+
+    return s
+
+
 def download_metadata_if_needed(metadata_dir, split_name="train"):
     """
     Download Miradata metadata CSV files if they don't exist.
@@ -105,6 +149,12 @@ def download_metadata_if_needed(metadata_dir, split_name="train"):
     print("Metadata CSV not found. Downloading Miradata dataset metadata...")
     try:
         dataset = load_dataset("TencentARC/MiraData")
+
+        # Drop duplicates if any in each split
+        for split in dataset.keys():
+            split_ds = dataset[split].to_pandas()
+            split_ds["video_id"] = normalize_strings(split_ds["video_id"])
+            dataset[split] = split_ds.drop_duplicates()
 
         # Save the requested split to CSV
         if split_name in dataset.keys():
