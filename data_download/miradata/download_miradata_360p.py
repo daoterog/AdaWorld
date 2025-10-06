@@ -89,12 +89,12 @@ def download_ytb_video(
         # Extract video ID from YouTube URL and download
         video_id = video_url.split("watch?v=")[-1]
 
-        if os.path.exists(str(raw_video_download_path) + ".part"):
+        if os.path.exists(raw_video_download_path.with_suffix(".part")):
             # remove any existing partial download file
             logger.info(
                 f"Removing existing partial download file: {str(raw_video_download_path) + '.part'}"
             )
-            os.remove(str(raw_video_download_path) + ".part")
+            os.remove(raw_video_download_path.with_suffix(".part"))
 
         if os.path.exists(raw_video_download_path):
             # skip if video already exists (resume functionality)
@@ -119,10 +119,10 @@ def download_stream_video(
     try:
         res = requests.get(video_url, stream=True)
 
-        if os.path.exists(raw_video_download_path + ".tmp"):
+        if os.path.exists(raw_video_download_path.with_suffix(".tmp")):
             # Clean up any existing temporary file
-            logger.info(f"Removing temporary file: {raw_video_download_path + '.tmp'}")
-            os.remove(raw_video_download_path + ".tmp")
+            logger.info(f"Removing temporary file: {raw_video_download_path.with_suffix('.tmp')}")
+            os.remove(raw_video_download_path.with_suffix(".tmp"))
 
         if os.path.exists(raw_video_download_path):
             # Skip if video already exists (resume functionality)
@@ -130,12 +130,14 @@ def download_stream_video(
             return
 
         # Download in chunks to handle large files efficiently
-        with open(raw_video_download_path + ".tmp", "wb") as f:
-            for chunk in res.iter_content(chunk_size=10240):  # 10KB chunks
+        logger.info(f"Downloading stream video to {raw_video_download_path}")
+        with open(raw_video_download_path.with_suffix(".tmp"), "wb") as f:
+            for chunk in tqdm.tqdm(res.iter_content(chunk_size=10240), total=int(res.headers.get("Content-Length", 0)) // 10240):
                 f.write(chunk)
+        logger.info(f"Download complete: {raw_video_download_path}")
 
         # Atomically rename temp file to final name once download completes
-        os.rename(raw_video_download_path + ".tmp", raw_video_download_path)
+        os.rename(raw_video_download_path.with_suffix(".tmp"), raw_video_download_path)
 
     except Exception as error:
         logger.error(f"Error downloading stream video {download_id}: {error}")
@@ -143,21 +145,12 @@ def download_stream_video(
 
 def clip_video(
     download_id: str,
-    clip_video_save_dir: Path,
-    file_path: str,
     raw_video_download_path: str,
     clip_video_path: str,
     timestamp: str,
 ) -> None:
     """Clip the downloaded video to the specified timestamp range."""
     try:
-        # Build output path for the clipped video segment
-        clip_video_path = clip_video_save_dir / file_path
-
-        # Skip if clipped video already exists (resume functionality)
-        if os.path.exists(clip_video_path):
-            logger.info(f"Clipped video already exists, skipping: {clip_video_path}")
-            return
 
         # Parse timestamp information from the CSV (stored as string representation of list)
         # Format: ["HH:MM:SS.fff", "HH:MM:SS.fff"] for [start_time, end_time]
@@ -199,7 +192,15 @@ def process_videos(
 
     for _, row in tqdm.tqdm(df.iterrows(), desc="Processing videos"):
 
-        # Define paths for raw and clipped videos
+        # Define path for clipped video
+        clip_video_path = clip_video_save_dir / row["file_path"]
+
+        # Skip if clipped video already exists (resume functionality)
+        if os.path.exists(clip_video_path):
+            logger.info(f"Clipped video already exists, skipping: {clip_video_path}")
+            continue
+
+        # Define paths for raw
         download_id = int(row["clip_id"])
         raw_video_download_path = raw_video_save_dir / (
             str(download_id).zfill(12) + ".mp4"
@@ -223,10 +224,8 @@ def process_videos(
 
         clip_video(
             download_id=download_id,
-            clip_video_save_dir=clip_video_save_dir,
-            file_path=row["file_path"],
             raw_video_download_path=raw_video_download_path,
-            clip_video_path=clip_video_save_dir,
+            clip_video_path=clip_video_path,
             timestamp=row["timestamp"],
         )
 
