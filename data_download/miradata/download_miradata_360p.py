@@ -17,6 +17,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.append(Path(__file__).parents[2].as_posix())
 
@@ -121,7 +122,9 @@ def download_stream_video(
 
         if os.path.exists(raw_video_download_path.with_suffix(".tmp")):
             # Clean up any existing temporary file
-            logger.info(f"Removing temporary file: {raw_video_download_path.with_suffix('.tmp')}")
+            logger.info(
+                f"Removing temporary file: {raw_video_download_path.with_suffix('.tmp')}"
+            )
             os.remove(raw_video_download_path.with_suffix(".tmp"))
 
         if os.path.exists(raw_video_download_path):
@@ -132,7 +135,10 @@ def download_stream_video(
         # Download in chunks to handle large files efficiently
         logger.info(f"Downloading stream video to {raw_video_download_path}")
         with open(raw_video_download_path.with_suffix(".tmp"), "wb") as f:
-            for chunk in tqdm.tqdm(res.iter_content(chunk_size=10240), total=int(res.headers.get("Content-Length", 0)) // 10240):
+            for chunk in tqdm.tqdm(
+                res.iter_content(chunk_size=10240),
+                total=int(res.headers.get("Content-Length", 0)) // 10240,
+            ):
                 f.write(chunk)
         logger.info(f"Download complete: {raw_video_download_path}")
 
@@ -201,10 +207,8 @@ def process_videos(
             continue
 
         # Define paths for raw
-        download_id = int(row["clip_id"])
-        raw_video_download_path = raw_video_save_dir / (
-            str(download_id).zfill(12) + ".mp4"
-        )
+        raw_download_id = quote(row["video_url"], safe="")
+        raw_video_download_path = raw_video_save_dir / (raw_download_id + ".mp4")
 
         # Skip download if video already exists (resume functionality)
         if not os.path.exists(raw_video_download_path):
@@ -212,18 +216,18 @@ def process_videos(
             raw_video_download_path.parent.mkdir(parents=True, exist_ok=True)
 
             if "youtube" in row["source"]:
-                logger.info(f"Downloading YouTube video ID {download_id}")
+                logger.info(f"Downloading YouTube video ID {raw_download_id}")
                 download_ytb_video(
-                    row["video_url"], raw_video_download_path, download_id
+                    row["video_url"], raw_video_download_path, raw_download_id
                 )
             else:
-                logger.info(f"Downloading stream video ID {download_id}")
+                logger.info(f"Downloading stream video ID {raw_download_id}")
                 download_stream_video(
-                    row["video_url"], raw_video_download_path, download_id
+                    row["video_url"], raw_video_download_path, raw_download_id
                 )
 
         clip_video(
-            download_id=download_id,
+            download_id=raw_download_id,
             raw_video_download_path=raw_video_download_path,
             clip_video_path=clip_video_path,
             timestamp=row["timestamp"],
