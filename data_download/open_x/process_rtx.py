@@ -10,6 +10,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Set
 from pathlib import Path
 
 # Suppress TensorFlow verbose logging to reduce console output during processing
@@ -191,7 +192,7 @@ def extract_sample(
     save_dir: str,
     split: str,
     extra: str = None,
-    sample_indices: pd.DataFrame = None,
+    sample_indices: Set = None,
 ) -> None:
     """
     Extract image sequences from a dataset and save them as MP4 videos.
@@ -227,12 +228,43 @@ def extract_sample(
     episodes_processed = 0
     episodes_failed = 0
 
+    # Check if every episode has been processed already
+    total_episodes = EPISODE_COUNT_PER_DATASET[dataset_name]
+    existing_videos = list(Path(save_dir, split).glob("*.mp4"))
+    video_indices = [
+        int(video_path.stem) for video_path in existing_videos if video_path.stem.isdigit()
+    ]
+    if len(existing_videos) >= total_episodes:
+        logger.info(
+            f"    ⏭️  All {total_episodes} episodes already processed, skipping."
+        )
+        return
+    elif sample_indices is not None:
+        # Check if there are missing indices to process
+        missing_indices = set(sample_indices) - set(video_indices)
+        if not missing_indices:
+            logger.info(
+                f"    ⏭️  All {len(sample_indices)} sampled episodes already processed, skipping."
+            )
+            return
+
+        logger.info(
+            f"    🔍 {len(missing_indices)} sampled episodes to process: {sorted(missing_indices)}"
+        )
+        sample_indices = missing_indices
+
     # Process each episode in the dataset with progress tracking
     for episode_idx in trange(
         len(ds), desc=f"Extracting {dataset_name.upper()} {split}"
     ):
         try:
             episode = next(ds_iter)
+
+            # Create output path with zero-padded episode index
+            save_path = save_dir / split / f"{episode_idx:08}.mp4"
+            if save_path.exists():
+                logger.info(f"      ⏭️  Skipping existing video: {save_path}")
+                continue
 
             if sample_indices is not None and episode_idx not in sample_indices:
                 continue
@@ -258,9 +290,6 @@ def extract_sample(
             except:
                 # Images are already in correct format (numpy arrays)
                 images = images
-
-            # Create output path with zero-padded episode index
-            save_path = save_dir / split / f"{episode_idx:08}.mp4"
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert image sequence to video file
@@ -291,11 +320,7 @@ def get_compatible_keys(
         if display_key in builder.info.features["steps"]["observation"]:
             compatible_keys.append(display_key)
 
-        if compatible_keys:
-            logger.info(
-                f"  🎯 Found {len(compatible_keys)} compatible image keys: {compatible_keys}"
-            )
-        else:
+        if not compatible_keys:
             logger.warning(f"  ⚠️  No compatible image keys found")
             infeasible_datasets.append(dataset)
             continue
@@ -380,76 +405,10 @@ def main():
             logger.info(f"\n  🖼️  Processing image key: {display_key}")
 
             # Special handling for mimic_play dataset which has nested image structure
-            if dataset == "mimic_play":
-                if display_key == "image":
-                    # Extract front_image_1 from the nested image structure
-                    folder = args.save_root / f"{dataset}-front_image_1"
-                    if not os.path.exists(folder):
-                        logger.info(f"    📁 Creating output folder: {folder}")
-                        for split_name in builder.info.splits.keys():
-                            extract_sample(
-                                builder,
-                                display_key,
-                                dataset,
-                                folder,
-                                split_name,
-                                "front_image_1",
-                                sample_indices=(
-                                    set(dataset_sample_indices["indices"].values)
-                                    if sample_indices is not None
-                                    else None
-                                ),
-                            )
-                    else:
-                        logger.info(f"    ⏭️  Skipping {folder} (already exists)")
-
-                    # Extract front_image_2 from the nested image structure
-                    folder = args.save_root / f"{dataset}-front_image_2"
-                    if not os.path.exists(folder):
-                        logger.info(f"    📁 Creating output folder: {folder}")
-                        for split_name in builder.info.splits.keys():
-                            extract_sample(
-                                builder,
-                                display_key,
-                                dataset,
-                                folder,
-                                split_name,
-                                "front_image_2",
-                                sample_indices=(
-                                    set(dataset_sample_indices["indices"].values)
-                                    if sample_indices is not None
-                                    else None
-                                ),
-                            )
-                    else:
-                        logger.info(f"    ⏭️  Skipping {folder} (already exists)")
-                else:
-                    # Handle other image keys in mimic_play with nested structure
-                    folder = args.save_root / f"{dataset}-{display_key}"
-                    if not os.path.exists(folder):
-                        logger.info(f"    📁 Creating output folder: {folder}")
-                        for split_name in builder.info.splits.keys():
-                            extract_sample(
-                                builder,
-                                display_key,
-                                dataset,
-                                folder,
-                                split_name,
-                                display_key,
-                                sample_indices=(
-                                    set(dataset_sample_indices["indices"].values)
-                                    if sample_indices is not None
-                                    else None
-                                ),
-                            )
-                    else:
-                        logger.info(f"    ⏭️  Skipping {folder} (already exists)")
-            else:
-                # Standard processing for most datasets
-                folder = args.save_root / f"{dataset}-{display_key}"
-                if not os.path.exists(folder):  # Skip if already processed
+            if dataset == "mimic_play" and display_key == "image":
+                for folder_name in ["front_image_1", "front_image_2"]:
+                    folder = args.save_root / f"{dataset}-{folder_name}"
                     logger.info(f"    📁 Creating output folder: {folder}")
-                    # Process all available splits (train, test, validation, etc.)
                     for split_name in builder.info.splits.keys():
                         extract_sample(
                             builder,
@@ -457,14 +416,31 @@ def main():
                             dataset,
                             folder,
                             split_name,
+                            folder_name,
                             sample_indices=(
                                 set(dataset_sample_indices["indices"].values)
                                 if sample_indices is not None
                                 else None
                             ),
                         )
-                else:
-                    logger.info(f"    ⏭️  Skipping {folder} (already exists)")
+            else:
+                # Standard processing for most datasets
+                folder = args.save_root / f"{dataset}-{display_key}"
+                logger.info(f"    📁 Creating output folder: {folder}")
+                # Process all available splits (train, test, validation, etc.)
+                for split_name in builder.info.splits.keys():
+                    extract_sample(
+                        builder,
+                        display_key,
+                        dataset,
+                        folder,
+                        split_name,
+                        sample_indices=(
+                            set(dataset_sample_indices["indices"].values)
+                            if sample_indices is not None
+                            else None
+                        ),
+                    )
 
             # Mark dataset as feasible since it has at least one compatible image key
             is_feasible = True
