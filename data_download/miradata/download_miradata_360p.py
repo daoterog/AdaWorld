@@ -186,9 +186,17 @@ def clip_video(
 
 
 def process_videos(
-    df: pd.DataFrame, raw_video_save_dir: Path, clip_video_save_dir: str
+    df: pd.DataFrame,
+    raw_video_save_dir: Path,
+    clip_video_save_dir: str,
+    remove_raw_videos: bool = False,
 ) -> None:
     """Process and download videos from the Miradata dataset."""
+
+    # Count occurrences of each video URL for removal later.
+    video_url_counts = df["video_url"].value_counts()
+    video_url_counter = {}
+
     for _, row in tqdm.tqdm(df.iterrows(), desc="Processing videos"):
 
         # Define paths for raw and clipped videos
@@ -222,6 +230,20 @@ def process_videos(
             timestamp=row["timestamp"],
         )
 
+        if remove_raw_videos:
+            if row["video_url"] in video_url_counter:
+                video_url_counter[row["video_url"]] += 1
+            else:
+                video_url_counter[row["video_url"]] = 1
+
+            if (
+                video_url_counter[row["video_url"]]
+                == video_url_counts[row["video_url"]]
+            ):
+                if os.path.exists(raw_video_download_path):
+                    os.remove(raw_video_download_path)
+                    logger.info(f"Removed raw video: {raw_video_download_path}")
+
 
 def main() -> None:
     try:
@@ -239,7 +261,9 @@ def main() -> None:
             if not os.path.exists(metadata_csv_path):
                 logger.warning(f"Specified metadata CSV not found: {metadata_csv_path}")
                 logger.warning("Attempting to auto-download metadata...")
-                metadata_csv_path = download_metadata_if_needed(metadata_dir, args.split)
+                metadata_csv_path = download_metadata_if_needed(
+                    metadata_dir, args.split
+                )
 
         # Load the metadata CSV file containing video information
         df = pd.read_csv(metadata_csv_path, encoding="utf-8")
@@ -250,13 +274,21 @@ def main() -> None:
         # If --sample flag is set, reduce to a small subset for testing
         if args.sample:
             df, _ = split_data(
-                df, train_size=args.n_samples / len(df), strata=["source"], random_state=42
+                df,
+                train_size=args.n_samples / len(df),
+                strata=["source"],
+                random_state=42,
             )
             logger.info(
                 f"Sample mode enabled: reduced dataset to {args.n_samples} random entries for testing"
             )
 
-        process_videos(df, args.raw_video_save_dir, args.clip_video_save_dir)
+        process_videos(
+            df,
+            args.raw_video_save_dir,
+            args.clip_video_save_dir,
+            args.remove_raw_videos,
+        )
 
         logger.info("Processing complete! All videos have been downloaded and clipped.")
         logger.info(f"Metadata used: {metadata_csv_path}")
