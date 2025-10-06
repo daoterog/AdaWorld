@@ -14,6 +14,7 @@ The script supports resuming downloads - it will skip files that already exist.
 import argparse
 import logging
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -79,6 +80,31 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
     return args
+
+
+def get_videos_to_process(df: pd.DataFrame, clip_video_save_dir: Path) -> pd.DataFrame:
+    """Find clips that have already been processed and remove them from the dataframe."""
+
+    logger.info("Finding already processed clips to skip...")
+    res = subprocess.run(
+        ["find", str(clip_video_save_dir / "video_clips"), "-type", "f"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+    # keep only the part starting at "video_clips/"
+    dirs = set()
+    for line in res.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "video_clips/" in line:
+            dirs.add("video_clips/" + line.split("video_clips/", 1)[1])
+
+    logger.info(f"Found {len(dirs)} already processed clips to skip.")
+
+    return df[~df.file_path.isin(dirs)]
 
 
 def download_ytb_video(
@@ -284,6 +310,9 @@ def main() -> None:
             logger.info(
                 f"Sample mode enabled: reduced dataset to {args.n_samples} random entries for testing"
             )
+
+        # Find clips that have already been processed and remove them from the dataframe.
+        df = get_videos_to_process(df, args.clip_video_save_dir)
 
         process_videos(
             df,
