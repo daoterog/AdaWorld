@@ -69,8 +69,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path(__file__).resolve().parents[2]
         / "data"
-        / "miradata"
-        / "clip_video",
+        / "miradata",
         help="Directory to save clipped video segments",
     )
     parser.add_argument(
