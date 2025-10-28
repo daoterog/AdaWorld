@@ -1,0 +1,20 @@
+name: stableretro_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8.20
+  - pip
+  - pip:
+    - "cloudpickle==3.1.1"
+    - "farama-notifications==0.0.4"
+    - "gymnasium==1.1.1"
+    - "imageio==2.35.1"
+    - "importlib-metadata==8.5.0"
+    - "numpy==1.24.4"
+    - "pillow==10.4.0"
+    - "pyglet==1.5.31"
+    - "stable-retro==0.9.5"
+    - "tqdm==4.67.1"
+    - "typing-extensions==4.13.2"
+    - "zipp==3.20.2"
