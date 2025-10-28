@@ -6,31 +6,129 @@ from various camera viewpoints and converting them into MP4 video files. It hand
 dataset formats and camera configurations commonly found in robotics datasets.
 """
 
+import argparse
+import logging
 import os
-from dataclasses import dataclass
-from os import listdir, makedirs, path
+import sys
+from typing import Set
+from pathlib import Path
 
 # Suppress TensorFlow verbose logging to reduce console output during processing
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+sys.path.append(Path(__file__).parents[2].as_posix())
 
 import imageio  # For video file creation and image processing
+import numpy as np
+import pandas as pd
 import tensorflow_datasets as tfds  # For loading and processing TensorFlow datasets
+from sklearn.model_selection import train_test_split
 from tqdm.auto import trange  # For progress bars during batch processing
 
+from data_download.open_x.constants import (DISPLAY_KEYS,
+                                            EPISODE_COUNT_PER_DATASET)
+from data_download.utils import split_data
 
-@dataclass
-class Args:
-    """Configuration class for dataset processing parameters."""
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    save_root: str = (
-        "../../data/openx"  # Root directory where processed video files will be saved
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Process RTX datasets to extract videos"
     )
-    orig_root: str = (
-        "../../data/rtx"  # Root directory containing the original downloaded RTX datasets
+    parser.add_argument(
+        "--save_root",
+        type=str,
+        default=Path(__file__).parents[2] / "data" / "open_x",
+        help="Directory to save processed video files",
+    )
+    parser.add_argument(
+        "--rtx_root",
+        type=str,
+        default=Path(__file__).parents[2] / "data" / "rtx",
+        help="Root directory where original RTX datasets are stored",
+    )
+    parser.add_argument(
+        "--download_and_process",
+        action="store_true",
+        help="If set, download and process datasets; otherwise, only process existing data",
+    )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="If set, process only a small sample of the data for testing",
+    )
+    parser.add_argument(
+        "--n_samples",
+        type=int,
+        default=10,
+        help="Number of samples to process if --sample is set",
+    )
+    parser.add_argument(
+        "--remove_raw_videos",
+        action="store_true",
+        help="If set, remove raw video files after processing to save space",
+    )
+    return parser.parse_args()
+
+
+def get_data_split(n_samples: int) -> pd.DataFrame:
+
+    # Create index for dataset
+    indices = None
+    categories = None
+    for dataset, episode_count in EPISODE_COUNT_PER_DATASET.items():
+        dataset_indices = np.arange(episode_count)
+        dataset_categories = pd.Series([dataset] * episode_count)
+        if indices is None:
+            indices = dataset_indices
+            categories = dataset_categories
+        else:
+            indices = np.concatenate((indices, dataset_indices))
+            categories = pd.concat((categories, dataset_categories))
+
+    df = pd.DataFrame({"indices": indices, "categories": categories})
+
+    sample_indices, _ = split_data(
+        df, train_size=(n_samples / len(df)), strata=["categories"], random_state=42
     )
 
+    return sample_indices
 
-def dataset2path(dataset_name) -> str:
+
+def download_dataset(dataset_name: str, rtx_root: Path) -> None:
+    """
+    Download the specified RTX dataset using TensorFlow Datasets.
+
+    Args:
+        dataset_name (str): Name of the dataset to download
+        rtx_root (Path): Root directory where datasets should be stored
+    """
+
+    # Check if dataset already exists
+    dataset_path = rtx_root / dataset_name
+    if dataset_path.exists():
+        logger.info(f"  ⏭️  Dataset {dataset_name} already exists, skipping download.")
+        return
+
+    try:
+        logger.info(f"  ⬇️  Downloading dataset: {dataset_name}")
+
+        logger.info(f"     Running download script for {dataset_name}...")
+        logger.info(
+            f"bash {Path(__file__).parent}/download_specific_dataset.sh {dataset_name} {rtx_root}"
+        )
+        ret = os.system(
+            f"bash {Path(__file__).parent}/download_specific_dataset.sh {dataset_name} {rtx_root}"
+        )
+
+        if ret != 0:
+            raise RuntimeError(f"Download script failed with exit code {ret}")
+    except Exception as e:
+        logger.error(f"  ❌  Failed to download dataset {dataset_name}: {e}")
+
+
+def dataset2path(rtx_root: Path, dataset_name: str) -> str:
     """
     Construct the path to the latest version of a specified dataset.
 
@@ -43,21 +141,21 @@ def dataset2path(dataset_name) -> str:
     Returns:
         str: Full path to the latest version of the dataset
     """
-    print(f"  📁 Looking for dataset: {dataset_name}")
+    logger.info(f"  📁 Looking for dataset: {dataset_name}")
 
     # List all version directories for the given dataset
-    dataset_path = path.join(Args.orig_root, dataset_name)
-    versions = listdir(dataset_path)
+    dataset_path = rtx_root / dataset_name
+    versions = os.listdir(dataset_path)
     versions.sort()
-    print(f"     Found versions: {versions}")
+    logger.info(f"     Found versions: {versions}")
 
     # Filter for version directories (typically have 5-character names like '1.0.0')
     versions = [version for version in versions if len(version) == 5]
 
     # Select the latest version (last in sorted order)
     version = versions[-1]
-    final_path = path.join(Args.orig_root, dataset_name, version)
-    print(f"     Using latest version: {version} -> {final_path}")
+    final_path = rtx_root / dataset_name / version
+    logger.info(f"     Using latest version: {version} -> {final_path}")
 
     return final_path
 
@@ -71,7 +169,9 @@ def save_images_to_video(images: list, output_file: str, fps: int = 10) -> None:
         output_file (str): Path where the output video file will be saved
         fps (int, optional): Frames per second for the output video. Defaults to 10.
     """
-    print(f"      🎬 Creating video: {output_file} ({len(images)} frames @ {fps}fps)")
+    logger.info(
+        f"      🎬 Creating video: {output_file} ({len(images)} frames @ {fps}fps)"
+    )
 
     # Create video writer with specified fps
     writer = imageio.get_writer(output_file, fps=fps)
@@ -82,16 +182,17 @@ def save_images_to_video(images: list, output_file: str, fps: int = 10) -> None:
 
     # Close the writer to finalize the video file
     writer.close()
-    print(f"      ✅ Video saved successfully")
+    logger.info(f"      ✅ Video saved successfully")
 
 
 def extract_sample(
-    tfds_builder,
+    tfds_builder: tfds.core.DatasetBuilder,
     obs_key: str,
     dataset_name: str,
     save_dir: str,
     split: str,
     extra: str = None,
+    sample_indices: Set = None,
 ) -> None:
     """
     Extract image sequences from a dataset and save them as MP4 videos.
@@ -107,25 +208,50 @@ def extract_sample(
         split (str): Dataset split to process ('train', 'test', 'validation')
         extra (str, optional): Additional key for nested observation structures
     """
-    print(f"    🔄 Processing {split} split for observation key: {obs_key}")
+    logger.info(f"    🔄 Processing {split} split for observation key: {obs_key}")
     if extra:
-        print(f"       Using nested key: {extra}")
+        logger.info(f"       Using nested key: {extra}")
 
     # Try to load dataset as TensorFlow dataset, fallback to data source if needed
     try:
         ds = tfds_builder.as_dataset(split=split)
-        print(f"       ✅ Loaded as TensorFlow dataset")
+        logger.info(f"       ✅ Loaded as TensorFlow dataset")
     except Exception as e:
         # Some datasets require data source loading instead of dataset loading
-        print(
+        logger.warning(
             f"       ⚠️  Failed to load as dataset, trying data source: {str(e)[:100]}..."
         )
         ds = tfds_builder.as_data_source(split=split)
-        print(f"       ✅ Loaded as data source")
+        logger.info(f"       ✅ Loaded as data source")
 
     ds_iter = iter(ds)
     episodes_processed = 0
     episodes_failed = 0
+
+    # Check if every episode has been processed already
+    total_episodes = EPISODE_COUNT_PER_DATASET[dataset_name]
+    existing_videos = list(Path(save_dir, split).glob("*.mp4"))
+    video_indices = [
+        int(video_path.stem) for video_path in existing_videos if video_path.stem.isdigit()
+    ]
+    if len(existing_videos) >= total_episodes:
+        logger.info(
+            f"    ⏭️  All {total_episodes} episodes already processed, skipping."
+        )
+        return
+    elif sample_indices is not None:
+        # Check if there are missing indices to process
+        missing_indices = set(sample_indices) - set(video_indices)
+        if not missing_indices:
+            logger.info(
+                f"    ⏭️  All {len(sample_indices)} sampled episodes already processed, skipping."
+            )
+            return
+
+        logger.info(
+            f"    🔍 {len(missing_indices)} sampled episodes to process: {sorted(missing_indices)}"
+        )
+        sample_indices = missing_indices
 
     # Process each episode in the dataset with progress tracking
     for episode_idx in trange(
@@ -133,6 +259,15 @@ def extract_sample(
     ):
         try:
             episode = next(ds_iter)
+
+            # Create output path with zero-padded episode index
+            save_path = save_dir / split / f"{episode_idx:08}.mp4"
+            if save_path.exists():
+                logger.info(f"      ⏭️  Skipping existing video: {save_path}")
+                continue
+
+            if sample_indices is not None and episode_idx not in sample_indices:
+                continue
 
             # Handle different dataset structures for image extraction
             if dataset_name == "robot_vqa":
@@ -155,10 +290,7 @@ def extract_sample(
             except:
                 # Images are already in correct format (numpy arrays)
                 images = images
-
-            # Create output path with zero-padded episode index
-            save_path = path.join(save_dir, split, f"{episode_idx:08}.mp4")
-            makedirs(path.dirname(save_path), exist_ok=True)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Convert image sequence to video file
             save_images_to_video(images, save_path)
@@ -168,196 +300,115 @@ def extract_sample(
             # Skip episodes that fail to process (corrupted data, missing keys, etc.)
             episodes_failed += 1
             if episodes_failed <= 5:  # Only show first few errors to avoid spam
-                print(f"       ⚠️  Episode {episode_idx} failed: {str(e)[:100]}...")
+                logger.warning(
+                    f"       ⚠️  Episode {episode_idx} failed: {str(e)[:100]}..."
+                )
             elif episodes_failed == 6:
-                print(f"       ⚠️  Suppressing further error messages...")
+                logger.info(f"       ⚠️  Suppressing further error messages...")
 
-    print(
+    logger.info(
         f"    📊 Split {split} complete: {episodes_processed} processed, {episodes_failed} failed"
     )
 
 
-dataset_list = [
-    "aloha_mobile",
-    "asu_table_top_converted_externally_to_rlds",
-    "austin_buds_dataset_converted_externally_to_rlds",
-    "austin_sailor_dataset_converted_externally_to_rlds",
-    "austin_sirius_dataset_converted_externally_to_rlds",
-    "bc_z",
-    "berkeley_autolab_ur5",
-    "berkeley_cable_routing",
-    "berkeley_fanuc_manipulation",
-    "berkeley_gnm_cory_hall",
-    "berkeley_gnm_recon",
-    "berkeley_gnm_sac_son",
-    "berkeley_mvp_converted_externally_to_rlds",
-    "berkeley_rpt_converted_externally_to_rlds",
-    "bridge",
-    "cmu_franka_exploration_dataset_converted_externally_to_rlds",
-    "cmu_play_fusion",
-    "cmu_playing_with_food",
-    "cmu_stretch",
-    "columbia_cairlab_pusht_real",
-    "conq_hose_manipulation",
-    "dlr_edan_shared_control_converted_externally_to_rlds",
-    "dlr_sara_grid_clamp_converted_externally_to_rlds",
-    "dlr_sara_pour_converted_externally_to_rlds",
-    "dobbe",
-    "droid",
-    "fmb",
-    "fractal20220817_data",
-    "furniture_bench_dataset_converted_externally_to_rlds",
-    "iamlab_cmu_pickup_insert_converted_externally_to_rlds",
-    "imperialcollege_sawyer_wrist_cam",
-    "io_ai_tech",
-    "jaco_play",
-    "kaist_nonprehensile_converted_externally_to_rlds",
-    "kuka",
-    "language_table",
-    "maniskill_dataset_converted_externally_to_rlds",
-    "mimic_play",
-    "nyu_door_opening_surprising_effectiveness",
-    "nyu_franka_play_dataset_converted_externally_to_rlds",
-    "nyu_rot_dataset_converted_externally_to_rlds",
-    "plex_robosuite",
-    "qut_dexterous_manpulation",
-    "robo_net",
-    "robo_set",
-    "robot_vqa",
-    "roboturk",
-    "stanford_hydra_dataset_converted_externally_to_rlds",
-    "stanford_kuka_multimodal_dataset_converted_externally_to_rlds",
-    "stanford_mask_vit_converted_externally_to_rlds",
-    "taco_play",
-    "tokyo_u_lsmo_converted_externally_to_rlds",
-    "toto",
-    "ucsd_kitchen_dataset_converted_externally_to_rlds",
-    "ucsd_pick_and_place_dataset_converted_externally_to_rlds",
-    "uiuc_d3field",
-    "utaustin_mutex",
-    "utokyo_pr2_opening_fridge_converted_externally_to_rlds",
-    "utokyo_pr2_tabletop_manipulation_converted_externally_to_rlds",
-    "utokyo_xarm_bimanual_converted_externally_to_rlds",
-    "utokyo_xarm_pick_and_place_converted_externally_to_rlds",
-    "viola"
-]
-
-# =============================================================================
-# MAIN PROCESSING LOOP
-# =============================================================================
-# Track processing statistics
-feasible_datasets = 0  # Count of datasets that have compatible image observations
-infeasible_datasets = []  # List of datasets that lack compatible image keys
-# Comprehensive list of possible image observation keys found across RTX datasets
-# These represent different camera viewpoints and image formats used in robotics datasets
-display_keys = [
-    # Standard image keys
-    "image",
-    "wrist_image",
-    "hand_image",
-    "top_image",
-    "wrist225_image",
-    "wrist45_image",
-    "image_manipulation",
-    # High-resolution and specialized camera views
-    "highres_image",
-    "finger_vision_1",
-    "finger_vision_2",
-    "image_fisheye",
-    "wrist_image_left",
-    # Multi-view camera setups
-    "image_side_1",
-    "image_side_2",
-    "image_wrist_1",
-    "image_wrist_2",
-    "image_additional_view",
-    "image_left_side",
-    "image_right_side",
-    "image_left",
-    "image_right",
-    "image_top",
-    "image_wrist",
-    # Front and exterior camera views
-    "front_image_1",
-    "front_image_2",
-    "exterior_image_1_left",
-    "exterior_image_2_left",
-    "frontleft_fisheye_image",
-    "frontright_fisheye_image",
-    "hand_color_image",
-    # RGB format variations
-    "rgb",
-    "front_rgb",
-    "agentview_rgb",
-    "eye_in_hand_rgb",
-    "rgb_static",
-    "rgb_gripper",
-    # Numbered image sequences
-    "image_1",
-    "image_2",
-    "image_3",
-    "image_4",
-    "image1",
-    "image2",
-    "images",
-    # Camera position identifiers
-    "cam_high",
-    "cam_left_wrist",
-    "cam_right_wrist",
-]
-print("🚀 Starting RTX dataset processing...")
-print(f"📁 Source directory: {Args.orig_root}")
-print(f"💾 Output directory: {Args.save_root}")
-print(f"📋 Datasets to process: {[d for d in dataset_list]}")
-print("=" * 80)
-
-# Process each dataset in the list
-for dataset_idx, dataset in enumerate(dataset_list, 1):
-    print(f"\n🗂️  Processing dataset {dataset_idx}/{len(dataset_list)}: {dataset}")
-    is_feasible = False
-
-    try:
-        # Load the TensorFlow dataset builder for this dataset
-        builder = tfds.builder_from_directory(builder_dir=dataset2path(dataset))
-        print(f"  ✅ Dataset builder loaded successfully")
-        print(f"  📊 Available splits: {list(builder.info.splits.keys())}")
-
-        # Show available observation keys
-        obs_keys = list(builder.info.features["steps"]["observation"].keys())
-        print(
-            f"  🔍 Available observation keys: {obs_keys[:10]}{'...' if len(obs_keys) > 10 else ''}"
-        )
-
-    except Exception as e:
-        print(f"  ❌ Failed to load dataset builder: {str(e)}")
-        infeasible_datasets.append(dataset)
-        continue
-
+def get_compatible_keys(
+    builder: tfds.core.DatasetBuilder, infeasible_datasets: list, dataset: str
+) -> tuple:
     # Check each possible image key to see if it exists in this dataset
     compatible_keys = []
-    for display_key in display_keys:
+    for display_key in DISPLAY_KEYS:
         if display_key in builder.info.features["steps"]["observation"]:
             compatible_keys.append(display_key)
 
-    if compatible_keys:
-        print(
-            f"  🎯 Found {len(compatible_keys)} compatible image keys: {compatible_keys}"
+        if not compatible_keys:
+            logger.warning(f"  ⚠️  No compatible image keys found")
+            infeasible_datasets.append(dataset)
+            continue
+
+    return compatible_keys, infeasible_datasets
+
+
+def main():
+    """Main function to process all RTX datasets and extract videos from image observations."""
+
+    # Parse command line arguments
+    args = parse_args()
+
+    # Track processing statistics
+    feasible_datasets = 0  # Count of datasets that have compatible image observations
+    infeasible_datasets = []  # List of datasets that lack compatible image keys
+
+    # Comprehensive list of possible image observation keys found across RTX datasets
+    # These represent different camera viewpoints and image formats used in robotics datasets
+    logger.info("🚀 Starting RTX dataset processing...")
+    logger.info(f"📁 Source directory: {args.rtx_root}")
+    logger.info(f"💾 Output directory: {args.save_root}")
+    logger.info(
+        f"📋 Datasets to process: {[d for d in EPISODE_COUNT_PER_DATASET.keys()]}"
+    )
+    logger.info("=" * 80)
+
+    sample_indices = None
+    if args.sample:
+        logger.info(
+            f"🔍 Sampling enabled: processing {args.n_samples} samples per dataset"
         )
-    else:
-        print(f"  ⚠️  No compatible image keys found")
-        infeasible_datasets.append(dataset)
-        continue
+        sample_indices = get_data_split(args.n_samples)
+        logger.info(f"   Sample indices length: {len(sample_indices)}")
 
-    for display_key in compatible_keys:
-        print(f"\n  🖼️  Processing image key: {display_key}")
+    # Process each dataset in the lists
+    for dataset_idx, dataset in enumerate(EPISODE_COUNT_PER_DATASET.keys(), 1):
+        logger.info(
+            f"\n🗂️  Processing dataset {dataset_idx}/{len(EPISODE_COUNT_PER_DATASET)}: {dataset}"
+        )
+        is_feasible = False
 
-        # Special handling for mimic_play dataset which has nested image structure
-        if dataset == "mimic_play":
-            if display_key == "image":
-                # Extract front_image_1 from the nested image structure
-                folder = path.join(Args.save_root, f"{dataset}-front_image_1")
-                if not path.exists(folder):
-                    print(f"    📁 Creating output folder: {folder}")
+        if args.download_and_process:
+            download_dataset(dataset, args.rtx_root)
+
+        try:
+            # Load the TensorFlow dataset builder for this dataset
+            builder = tfds.builder_from_directory(
+                builder_dir=dataset2path(args.rtx_root, dataset)
+            )
+            logger.info(f"  ✅ Dataset builder loaded successfully")
+            logger.info(f"  📊 Available splits: {list(builder.info.splits.keys())}")
+
+            # Show available observation keys
+            obs_keys = list(builder.info.features["steps"]["observation"].keys())
+            logger.info(
+                f"  🔍 Available observation keys: {obs_keys[:10]}{'...' if len(obs_keys) > 10 else ''}"
+            )
+
+        except Exception as e:
+            logger.error(f"  ❌ Failed to load dataset builder: {str(e)}")
+            infeasible_datasets.append(dataset)
+            continue
+
+        # Determine which image keys are compatible with this dataset
+        compatible_keys, infeasible_datasets = get_compatible_keys(
+            builder, infeasible_datasets, dataset
+        )
+
+        if sample_indices is not None:
+            if dataset not in sample_indices["categories"].values:
+                logger.info(
+                    f"  ⏭️  Skipping {dataset} (no samples selected, class is too small for sample size)"
+                )
+                continue
+
+            dataset_sample_indices = sample_indices[
+                sample_indices["categories"] == dataset
+            ]
+
+        for display_key in compatible_keys:
+            logger.info(f"\n  🖼️  Processing image key: {display_key}")
+
+            # Special handling for mimic_play dataset which has nested image structure
+            if dataset == "mimic_play" and display_key == "image":
+                for folder_name in ["front_image_1", "front_image_2"]:
+                    folder = args.save_root / f"{dataset}-{folder_name}"
+                    logger.info(f"    📁 Creating output folder: {folder}")
                     for split_name in builder.info.splits.keys():
                         extract_sample(
                             builder,
@@ -365,74 +416,62 @@ for dataset_idx, dataset in enumerate(dataset_list, 1):
                             dataset,
                             folder,
                             split_name,
-                            "front_image_1",
+                            folder_name,
+                            sample_indices=(
+                                set(dataset_sample_indices["indices"].values)
+                                if sample_indices is not None
+                                else None
+                            ),
                         )
-                else:
-                    print(f"    ⏭️  Skipping {folder} (already exists)")
-
-                # Extract front_image_2 from the nested image structure
-                folder = path.join(Args.save_root, f"{dataset}-front_image_2")
-                if not path.exists(folder):
-                    print(f"    📁 Creating output folder: {folder}")
-                    for split_name in builder.info.splits.keys():
-                        extract_sample(
-                            builder,
-                            display_key,
-                            dataset,
-                            folder,
-                            split_name,
-                            "front_image_2",
-                        )
-                else:
-                    print(f"    ⏭️  Skipping {folder} (already exists)")
             else:
-                # Handle other image keys in mimic_play with nested structure
-                folder = path.join(Args.save_root, f"{dataset}-{display_key}")
-                if not path.exists(folder):
-                    print(f"    📁 Creating output folder: {folder}")
-                    for split_name in builder.info.splits.keys():
-                        extract_sample(
-                            builder,
-                            display_key,
-                            dataset,
-                            folder,
-                            split_name,
-                            display_key,
-                        )
-                else:
-                    print(f"    ⏭️  Skipping {folder} (already exists)")
-        else:
-            # Standard processing for most datasets
-            folder = path.join(Args.save_root, f"{dataset}-{display_key}")
-            if not path.exists(folder):  # Skip if already processed
-                print(f"    📁 Creating output folder: {folder}")
+                # Standard processing for most datasets
+                folder = args.save_root / f"{dataset}-{display_key}"
+                logger.info(f"    📁 Creating output folder: {folder}")
                 # Process all available splits (train, test, validation, etc.)
                 for split_name in builder.info.splits.keys():
-                    extract_sample(builder, display_key, dataset, folder, split_name)
-            else:
-                print(f"    ⏭️  Skipping {folder} (already exists)")
+                    extract_sample(
+                        builder,
+                        display_key,
+                        dataset,
+                        folder,
+                        split_name,
+                        sample_indices=(
+                            set(dataset_sample_indices["indices"].values)
+                            if sample_indices is not None
+                            else None
+                        ),
+                    )
 
-        # Mark dataset as feasible since it has at least one compatible image key
-        is_feasible = True
+            # Mark dataset as feasible since it has at least one compatible image key
+            is_feasible = True
 
-    # Update processing statistics
-    if is_feasible:
-        feasible_datasets += 1
-        print(f"  ✅ Dataset {dataset} processed successfully")
-    else:
-        infeasible_datasets.append(dataset)
-        print(f"  ❌ Dataset {dataset} marked as infeasible")
-# Print final processing summary
-print("\n" + "=" * 80)
-print("🏁 PROCESSING COMPLETE!")
-print("=" * 80)
-print(f"✅ Feasible datasets processed: {feasible_datasets}")
-print(f"❌ Infeasible datasets: {len(infeasible_datasets)}")
+        # Update processing statistics
+        if is_feasible:
+            feasible_datasets += 1
+            logger.info(f"  ✅ Dataset {dataset} processed successfully")
+        else:
+            infeasible_datasets.append(dataset)
+            logger.info(f"  ❌ Dataset {dataset} marked as infeasible")
 
-if infeasible_datasets:
-    print(f"\n📋 Infeasible datasets list:")
-    for i, dataset in enumerate(infeasible_datasets, 1):
-        print(f"   {i}. {dataset}")
+        if args.remove_raw_videos:
+            os.system(f"rm -rf {args.rtx_root}/{dataset}")
+            logger.info("Raw videos have been removed after clipping.")
 
-print(f"\n📁 All output videos saved to: {Args.save_root}")
-print("🎉 Done!")
+    # Print final processing summary
+    logger.info("\n" + "=" * 80)
+    logger.info("🏁 PROCESSING COMPLETE!")
+    logger.info("=" * 80)
+    logger.info(f"✅ Feasible datasets processed: {feasible_datasets}")
+    logger.info(f"❌ Infeasible datasets: {len(infeasible_datasets)}")
+
+    if infeasible_datasets:
+        logger.info(f"\n📋 Infeasible datasets list:")
+        for i, dataset in enumerate(infeasible_datasets, 1):
+            logger.info(f"   {i}. {dataset}")
+
+    logger.info(f"\n📁 All output videos saved to: {args.save_root}")
+    logger.info("🎉 Done!")
+
+
+if __name__ == "__main__":
+    main()
