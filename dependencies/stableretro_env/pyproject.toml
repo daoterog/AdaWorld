@@ -1,0 +1,9 @@
+[project]
+name = "gym_retro_env"
+version = "0.1.0"
+requires-python = ">=3.8.0,<3.11"
+dependencies = [
+    "imageio>=2.15.0",
+    "stable-retro>=0.9.5",
+    "tqdm>=4.64.1",
+]
