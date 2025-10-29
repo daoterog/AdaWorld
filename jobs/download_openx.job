@@ -1,0 +1,25 @@
+#!/bin/bash
+
+#SBATCH --partition=staging
+#SBATCH --gpus=0
+#SBATCH --job-name=download-openx
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --time=12:00:00
+#SBATCH --output=slurm_output_openx_%A.out
+#SBATCH --mail-type=BEGIN,END
+#SBATCH --mail-user=daniel.otero.gomez@student.uva.nl
+
+module purge
+module load 2023
+module load Anaconda3/2023.07-2
+
+# Get username from $HOME
+USERNAME=$(basename "$HOME")
+REPO_DIR="/scratch-shared/$USERNAME/AdaWorld"
+
+cd "$REPO_DIR"
+
+source activate data_download
+
+srun python data_download/open_x/process_rtx.py --remove_raw_videos --download_and_process --sample --n_samples 605000
