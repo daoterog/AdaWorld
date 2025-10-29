@@ -1,3 +1,5 @@
+#!/bin/bash
+
 echo "gsutil not found. Attempting standalone installation for unauthenticated use..."
 
 # Define a local installation path

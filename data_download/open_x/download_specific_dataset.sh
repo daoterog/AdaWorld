@@ -75,7 +75,7 @@ fi
 
 if ! command -v gsutil &> /dev/null
 then
-    bash "$(dirname "$0")/install_gsutil.sh"
+    source "$(dirname "$0")/install_gsutil.sh"
 fi
 
 # Create download directory if it doesn't exist
